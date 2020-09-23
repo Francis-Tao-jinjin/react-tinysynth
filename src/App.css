@@ -47,10 +47,24 @@
   color: white;
 }
 
+.row {
+  display: flex;
+  width: 100%;
+  max-width: 850px;
+}
+
+.synthCtrl,
+.knobWrapper
+.channelSelector,
+.programSelector,
 .portSelector {
   user-select: none;
   height: 25px;
+  flex: 1;
 }
 
-.webaudioKeyboard {
+.synthCtrl,
+.knobWrapper {
+  height: 100px;
+  flex: 0.2;
 }

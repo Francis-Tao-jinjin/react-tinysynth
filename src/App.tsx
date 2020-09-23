@@ -1,21 +1,28 @@
 import React, { useState, useRef, useEffect } from 'react';
 import './App.css';
+import { Knob } from './knob';
 import { TinySynth } from './tinySynth';
+import { TinySynthPlayControl } from './tinySynthPlayCtrl';
 import { WebaudioKeyboard } from './webaudioKeyboard';
 
 function App() {
-
   const synth = useRef<TinySynth>();
   (window as any).tinySynth = synth.current;
+  const kbRef = useRef<null|WebaudioKeyboard>(null);
   const midiPort = useRef<any>([]);
+  const [synthReady, updateSynthState] = useState(false);
   const [currentPort, setMidiPort] = useState(-1);
   const [currentMidiChannel, setMidiChannel] = useState(0);
   const [midiInput, updateMidiInput] = useState<string[]>([]);
+  const [curentInstrument, changeInstrument] = useState(0);
+  const [instrumentList, setInstrumentList] = useState<{name:string}[]>([]);
 
   useEffect(() => {
     synth.current = new TinySynth();
+    updateSynthState(synth.current.isReady);
+    setInstrumentList(synth.current.programNameList);
     Init();
-    document.addEventListener('change', (ev) => {
+    document.addEventListener('webaudio-keyboard-change', (ev) => {
       KeyIn(ev);
     });
   }, []);
@@ -48,24 +55,49 @@ function App() {
     }
   }
 
+  function loadMidi(e:React.ChangeEvent<HTMLInputElement>) {
+    const fileInput = e.target as HTMLInputElement;
+    if (!fileInput.files) {
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      console.log(reader.result);
+      const midiData = (reader.result as ArrayBuffer);
+      if (midiData && synth.current) {
+        synth.current.loadMIDI(midiData);
+      }
+    }
+    reader.readAsArrayBuffer(fileInput.files[0]);
+  }
+
   function MidiIn(e:any) {
-    console.log('e', e);
     if (synth.current) {
       synth.current.send(e.data, 0);
+      if (kbRef.current) {
+        switch(e.data[0]&0xf0) {
+          case 0x90:
+            kbRef.current.setNote(e.data[2] ? 1 : 0, e.data[1]);
+            break;
+          case 0x80:
+            kbRef.current.setNote(0,e.data[1]);
+            break;
+        }
+      }
     }
   }
 
   function SelectMidi(n:number) {
-    console.log(midiPort.current);
     // midiPort.current
     if (currentPort >= 0) {
       midiPort.current[currentPort].onmidimessage = null;
     }
     setMidiPort(n);
     console.log('currentPort,', currentPort);
-    if (currentPort >= 0) {
-      midiPort.current[currentPort].onmidimessage = MidiIn;
+    if (n >= 0) {
+      midiPort.current[n].onmidimessage = MidiIn;
     }
+    console.log(midiPort.current);
   }
 
   function KeyIn(ev:any) {
@@ -85,51 +117,127 @@ function App() {
   function ProgChange(p:number) {
     if (synth.current) {
       synth.current.send([0xc0, p]);
+      changeInstrument(p);
     }
   }
 
   return (
     <div className="App">
       <div className='synthApp'>
-        <div className='portSelector'>
-          MIDI Keyboard:
-          <select
-            value={currentPort}
-            onChange={(ev) => SelectMidi(parseInt(ev.target.value))}>
-            <option value={-1}>--</option>
+        <div className='row'> 
+          <div className='col synthCtrl'>
             {
-              midiInput.map((value:any, idx) => {
-                return <option
-                    key={idx}
-                    value={idx}
-                  >{value}</option>
-              })
+              (synthReady && synth.current) ?
+              <TinySynthPlayControl
+                tinySynth={synth.current as TinySynth}
+              >
+              </TinySynthPlayControl> : null
             }
-          </select>
+          </div>
+          <div className='col knobWrapper'>
+            <Knob
+              size={40}
+              numTicks={25}
+              degrees={260}
+              min={0}
+              max={1}
+              value={0.5}
+              color={true}
+              precision={2}
+              label={'Volume'}
+              onChange={(value) => {
+                console.log('knob:', value);
+                synth.current?.setMasterVol(value);
+              }}
+              >
+            </Knob>
+          </div>
+          <div className='col knobWrapper'>
+            <Knob
+              size={40}
+              numTicks={25}
+              degrees={260}
+              min={0}
+              max={1}
+              value={0.3}
+              color={true}
+              precision={2}
+              label={'Reverb'}
+              onChange={(value) => {
+                console.log('knob:', value);
+                synth.current?.setReverbLev(value);
+              }}
+              >
+            </Knob>
+          </div>
+        </div>
+        <div className='row'>
+          <input type='file'
+            accept='.midi,.mid'
+            onChange={loadMidi}></input>
+        </div>
+        <div className='row'>
+          <div className='portSelector'>
+            MIDI Keyboard : 
+            <select
+              value={currentPort}
+              onChange={(ev) => SelectMidi(parseInt(ev.target.value))}>
+              <option value={-1}>--</option>
+              {
+                midiInput.map((value:any, idx) => {
+                  return <option
+                      key={idx}
+                      value={idx}
+                    >{value}</option>
+                })
+              }
+            </select>
+          </div>
         </div>
         <div className='webaudioKeyboard'>
           <WebaudioKeyboard
+            ref={kbRef}
             keys={73}
             min={35}
             width={800}
           ></WebaudioKeyboard>
         </div>
-        <div>
-          Ch :
-          <select
-            value={currentMidiChannel}
-            onChange={(e) => ChChange(parseInt(e.target.value))}>
-            <option value={0}>Ch1</option>
-            <option value={1}>Ch2</option>
-            <option value={2}>Ch3</option>
-            <option value={3}>Ch4</option>
-            <option value={4}>Ch5</option>
-            <option value={5}>Ch6</option>
-            <option value={6}>Ch7</option>
-            <option value={7}>Ch8</option>
-            <option value={8}>Ch9</option>
-            <option value={9}>Drum (Ch10)</option>
-          </select>
+        <div className='row'>
+          <div className='channelSelector'>
+            Ch : 
+            <select
+              value={currentMidiChannel}
+              onChange={(e) => ChChange(parseInt(e.target.value))}>
+              <option value={0}>Ch1</option>
+              <option value={1}>Ch2</option>
+              <option value={2}>Ch3</option>
+              <option value={3}>Ch4</option>
+              <option value={4}>Ch5</option>
+              <option value={5}>Ch6</option>
+              <option value={6}>Ch7</option>
+              <option value={7}>Ch8</option>
+              <option value={8}>Ch9</option>
+              <option value={9}>Drum (Ch10)</option>
+            </select>
+          </div>
+          <div className='programSelector'>
+            Prog : 
+            <select
+              value={curentInstrument}
+              onChange={(e) => ProgChange(parseInt(e.target.value))}
+              >
+            {
+              instrumentList.map((value, idx) => {
+                return <option
+                  key={idx}
+                  value={idx}
+                >
+                  {value.name}
+                </option>
+              })
+            }
+            </select>
+          </div>
         </div>
       </div>
     </div>

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { RefObject } from 'react';
 import './style.css';
 
 interface Props {
@@ -72,15 +72,6 @@ export class WebaudioKeyboard extends React.Component<Props, State> {
             }
             ctx.fillStyle = '#a22';
             ctx.fillRect(0, 0, this.width, this.height);
-            // document.addEventListener('mousedown', this.pointerdown);
-            // document.addEventListener('touchstart', this.pointerdown);
-            // document.addEventListener('mousemove', this.pointermove);
-            // document.addEventListener('touchmove', this.pointermove);
-            // document.addEventListener('mouseup', this.pointerup);
-            // document.addEventListener('touchend', this.pointerup);
-            // document.addEventListener('touchcancel', this.pointerup);
-            // document.addEventListener('mouseover', this.pointerover);
-            // document.addEventListener('mouseout', this.pointerout);
             document.addEventListener('keydown', this.keydown);
             document.addEventListener('keyup', this.keyup);
             this.redraw();
@@ -228,7 +219,7 @@ export class WebaudioKeyboard extends React.Component<Props, State> {
 
     public sendEvent(s:number, k:number) {
         var ev=document.createEvent('HTMLEvents');
-        ev.initEvent('change',true,true);
+        ev.initEvent('webaudio-keyboard-change',true,true);
         (ev as any).note=[s,k];
         this.canvasRef.current?.dispatchEvent(ev);
     }
@@ -252,7 +243,7 @@ export class WebaudioKeyboard extends React.Component<Props, State> {
             for(let i = 0; i < notes.length; ++i) {
                 this.setDispValues(notes[i][0], notes[i][1]);
                 const ev = document.createEvent('HTMLEvents');
-                ev.initEvent('change',true,true);
+                ev.initEvent('webaudio-keyboard-change',true,true);
                 (ev as any).note = notes[i];
                 this.canvasRef.current?.dispatchEvent(ev);
             }

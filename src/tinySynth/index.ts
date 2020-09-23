@@ -1,3 +1,5 @@
+import { EventEmitter } from "events";
+
 type Note = {
     t:number,
     e:number,
@@ -32,7 +34,12 @@ type MIDIProgram = {
     p: ProgramSpec;
 };
 
-export class TinySynth {
+export enum TinySynthEvent {
+    noteChange = 'noteChange',
+    playingProgress = 'playingProgress',
+}
+
+export class TinySynth extends EventEmitter {
     public masterVol:number = 0.5;
     public reverbLev:number = 0.3;
     public quality:number = 1;
@@ -42,7 +49,6 @@ export class TinySynth {
     public internalcontext:boolean = true;
     public tsmode:boolean = false;
     public voices:number = 64;
-    public useReverd:number = 1;
 
     public program:MIDIProgram[] = [];
     public drummap:MIDIProgram[] = [];
@@ -347,9 +353,12 @@ export class TinySynth {
     public chmod:GainNode[] = [];
     public chpan:StereoPannerNode[] = [];
 
+    private tick2Time = 0;
+    private playTime = 0;
+    public playIndex = 0;
     public maxTick = 0;
     public playTick = 0;
-    public playing = 0;
+    public playing:boolean = false;
     public releaseRatio = 3.5;
     public preroll = 0.2;
     public relcnt = 0;
@@ -365,14 +374,23 @@ export class TinySynth {
     private convBuf!:AudioBuffer;
     private conv!:ConvolverNode;
     private noiseBuf:{[key:string]:AudioBuffer} = {};
-    private useReverb:boolean = false;
+    private useReverb:boolean = true;
     private rev!:GainNode;
     public lfo!:OscillatorNode; //https://en.wikipedia.org/wiki/Low-frequency_oscillation
     public wave:{ [key:string]:PeriodicWave } = {};
 
+    public song:{
+        copyright:string,
+        text:string,
+        tempo:number,
+        timebase:number,
+        ev:{t:number, m:number[]}[]
+    } = {copyright:"", text:"", tempo:120, timebase:0, ev:[]};
+
     private tsdiff!:number;
 
     constructor() {
+        super();
         this.setQuality(1);
         this.ready();
     }
@@ -389,7 +407,7 @@ export class TinySynth {
         this.rhythm = [];
         this.maxTick = 0;
         this.playTick = 0;
-        this.playing = 0;
+        this.playing = false;
         this.releaseRatio = 3.5;
 
         for (let i = 0; i < 16; i++) {
@@ -412,7 +430,39 @@ export class TinySynth {
                         this.notetab.splice(i,1);
                     }
                 }
+                this.emit(TinySynthEvent.playingProgress, {
+                    playTick: this.playTick,
+                    maxTick: this.maxTick,
+                });
             }
+            if (this.playing && this.song.ev.length > 0) {
+                let e = this.song.ev[this.playIndex];
+                while (this.actx.currentTime + this.preroll > this.playTime) {
+                    if (e.m[0] == 0xff51) {
+                        this.song.tempo = e.m[1];
+                        this.tick2Time = 4 * 60 / this.song.tempo / this.song.timebase;
+                    } else {
+                        this.send(e.m, this.playTime);
+                    }
+                    this.playIndex++;
+                    if (this.playIndex >= this.song.ev.length) {
+                        if (this.loop) {
+                            this.playIndex = 0;
+                            e = this.song.ev[this.playIndex];
+                            this.playTick = e.t;
+                        } else {
+                            this.playTick=this.maxTick;
+                            this.playing = false;
+                            break;
+                        }
+                    } else {
+                        e = this.song.ev[this.playIndex];
+                        this.playTime += (e.t-this.playTick) * this.tick2Time;
+                        this.playTick = e.t;
+                    }
+                }
+            }
+
         }, 60);
         if (this.internalcontext) {
             window.AudioContext = window.AudioContext || (window as any).webkitAudioContext;
@@ -421,13 +471,24 @@ export class TinySynth {
         this.isReady = true;
     }
 
+    public formatTime(ti:number) {
+        ti = this.toSecond(ti);
+        let m = (ti/60)|0;
+        let s = ti%60;
+        return ('00'+m).substr(-2)+':'+('00'+s).substr(-2);
+    }
+
+    public toSecond(ti:number) {
+        const second = (ti * 4 * 60 / this.song.timebase / this.song.tempo)|0;
+        return second;
+    }
+
     public setMasterVol(v?:number) {
         if (v != undefined) {
             this.masterVol = v;
         }
         if (this.out) {
             this.out.gain.value = this.masterVol;
-            console.log('this.out', this.out);
         }
     }
 
@@ -437,11 +498,47 @@ export class TinySynth {
         }
         if (this.rev) {
             this.rev.gain.value = this.reverbLev * 8;
+            console.log('this.rev.gain.value', this.rev.gain.value);
         }
     }
 
     public setLoop(f:boolean) {
         this.loop = f;
+    }
+
+    public locateMIDI(tick:number) {
+        let i;
+        let isPlaying = this.playing;
+        this.stopMIDI();
+        for(i=0; i < this.song.ev.length && tick > this.song.ev[i].t; ++i){
+            const m:{t:number, m:number[]} = this.song.ev[i];
+            const ch = m.m[0]&0xf;
+            switch (m.m[0]&0xf0){
+                case 0xb0:
+                switch(m.m[1]){
+                case 1:  this.setModulation(ch,m.m[2]); break;
+                case 7:  this.setChVol(ch,m.m[2]); break;
+                case 10: this.setPan(ch,m.m[2]); break;
+                case 11: this.setExpression(ch,m.m[2]); break;
+                case 64: this.setSustain(ch,m.m[2]); break;
+            }
+            break;
+            case 0xc0: this.pg[m.m[0]&0x0f]=m.m[1]; break;
+            }
+            if(m.m[0]==0xff51)
+            this.song.tempo=m.m[1];
+        }
+        if(!this.song.ev[i]){
+            this.playIndex=0;
+            this.playTick=this.maxTick;
+        }
+        else{
+            this.playIndex=i;
+            this.playTick=this.song.ev[i].t;
+        }
+        if(isPlaying) {
+            this.playMIDI();
+        }
     }
 
     public getTimbreName (m:number, n:number){
@@ -465,7 +562,155 @@ export class TinySynth {
         this.rhythm[9]=1;
     }
 
-    public setQuality(q:number = 1) {
+    public stopMIDI() {
+        this.playing = false;
+        for (let i = 0; i<16; i++) {
+            this.allSoundOff(i);
+        }
+    }
+
+    public playMIDI() {
+        if (!this.song.timebase) {
+            return;
+        }
+        const dummy=this.actx.createOscillator();
+        dummy.connect(this.actx.destination);
+        dummy.frequency.value=0;
+        dummy.start(0);
+        dummy.stop(this.actx.currentTime+0.001);
+        if (this.playTick >= this.maxTick) {
+            this.playTick = 0;
+            this.playIndex = 0;
+        }
+        this.playTime = this.actx.currentTime+.1;
+        this.tick2Time = 4*60/this.song.tempo/this.song.timebase;
+        this.playing = true;
+    }
+
+    public loadMIDI(data:ArrayBuffer) {
+        function Get2(s:Uint8Array|number[], i:number) {
+            return (s[i] << 8) + s[i + 1];
+        }
+        function Get3(s:Uint8Array|number[], i:number) {
+            return (s[i] << 16) + (s[i+1] << 8) + s[i+2];
+        }
+        function Get4(s:Uint8Array|number[], i:number) {
+            return (s[i] << 24) + (s[i+1] << 16) + (s[i+2] << 8) + s[i+3];
+        }
+        function GetStr(s:number[]|Uint8Array, i:number, len:number) {
+            return String.fromCharCode.apply(null, (s as any).slice(i, i + len));
+        }
+        let datalen = 0;
+        let datastart = 0;
+        let runst = 0x90;
+        function Delta(s:number[]|Uint8Array, i:number) {
+            let v;
+            let d;
+            v = 0;
+            datalen = 1;
+            while((d = s[i]) & 0x80) {
+                v = (v<<7) + (d&0x7f);
+                ++datalen;
+                ++i;
+            }
+            return (v<<7)+d;
+        }
+        function Msg(song:any, tick:number, s:number[]|Uint8Array, i:number) {
+            var v=s[i];
+            datalen=1;
+            if((v&0x80)==0) {
+                v = runst;
+                datalen = 0;
+            }
+            runst=v;
+            switch(v&0xf0){
+            case 0xc0: case 0xd0:
+                song.ev.push({t:tick,m:[v,s[i+datalen]]});
+                datalen+=1;
+                break;
+            case 0xf0:
+                switch(v) {
+                    case 0xf0:
+                    case 0xf7: {
+                        const len = Delta(s,i+1);
+                        datastart = 1 + datalen;
+                        const exd = Array.from(s.slice(i+datastart,i+datastart+len));
+                        exd.unshift(0xf0);
+                        song.ev.push({t:tick,m:exd});
+                        datalen+=len+1;
+                        }
+                        break;
+                    case 0xff:
+                        const len = Delta(s, i + 2);
+                        datastart = 2+datalen;
+                        datalen = len+datalen+2;
+                        switch(s[i+1]) {
+                            case 0x02: song.copyright+=GetStr(s, i + datastart, datalen - 3); break;
+                            case 0x01: case 0x03: case 0x04: case 0x09:
+                            song.text=GetStr(s, i + datastart, datalen - datastart);
+                            break;
+                            case 0x2f:
+                            return 1;
+                            case 0x51:
+                            var val = Math.floor(60000000 / Get3(s, i + 3));
+                            song.ev.push({t:tick, m:[0xff51, val]});
+                            break;
+                        }
+                    break;
+                }
+                break;
+            default:
+                song.ev.push({t:tick,m:[v,s[i+datalen],s[i+datalen+1]]});
+                datalen+=2;
+            }
+            return 0;
+        }
+        this.stopMIDI();
+        const s = new Uint8Array(data);
+        let idx = 0;
+        let hd = s.slice(0,  4);
+        // the MThd of midi is '4d54 6864'
+        if(hd.toString()!="77,84,104,100") { //MThd 
+            return;
+        }
+        let len = Get4(s, 4);
+        // number of track
+        let numtrk = Get2(s, 10);
+        this.maxTick=0;
+        const tb = Get2(s, 12)*4;
+        idx = (len + 8);
+        this.song={copyright:"",text:"",tempo:120,timebase:tb,ev:[]};
+        for (let tr = 0; tr < numtrk; tr++) {
+            const head = s.slice(idx, idx+4);
+            len = Get4(s, idx + 4);
+            // MTrk is 4d54 726b
+            if (head.toString() == '77,84,114,107') {
+                let tick = 0;
+                let j = 0;
+                this.notetab.length = 0;
+                for(;;) {
+                    tick += Delta(s, idx + 8 + j);
+                    j += datalen;
+                    var e = Msg(this.song, tick, s, idx + 8 + j);
+                    j += datalen;
+                    if(e) {
+                        break;
+                    }
+                }
+                if(tick>this.maxTick) {
+                    this.maxTick = tick;
+                }
+            }
+            idx += (len + 8);
+        }
+        this.song.ev.sort((x, y) => {
+            return x.t-y.t;
+        });
+        this.reset();
+        this.locateMIDI(0);
+    }
+
+    private setQuality(q:number = 1) {
         if (q !== undefined) {
             this.quality = q;
         }
@@ -917,17 +1162,15 @@ export class TinySynth {
         this.lfo.start(0);
         for(let i = 0; i < 16; ++i){
             this.chvol[i] = this.actx.createGain();
-            // if(this.actx.createStereoPanner){
-            //     this.chpan[i] = this.actx.createStereoPanner();
-            //     this.chvol[i].connect(this.chpan[i]);
-            //     this.chpan[i].connect(this.out);
-            // }
-            // else{
-            //     delete this.chpan[i];
-            //     this.chvol[i].connect(this.out);
-            // }
-            this.chvol[i].connect(this.out);
-
+            if(this.actx.createStereoPanner){
+                this.chpan[i] = this.actx.createStereoPanner();
+                this.chvol[i].connect(this.chpan[i]);
+                this.chpan[i].connect(this.out);
+            }
+            else{
+                delete this.chpan[i];
+                this.chvol[i].connect(this.out);
+            }
             this.chmod[i] = this.actx.createGain();
             this.lfo.connect(this.chmod[i]);
             this.pg[i]=0;
