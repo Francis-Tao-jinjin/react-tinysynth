@@ -2,7 +2,7 @@
 
 This project is a rewrite of g200kg's tinysynth with react and typescript, the tinySynth ts file is ready for using like a npm module.
 
-I am currently developing a music arrangement software that runs on the browser, and found that the g200kg's tinysynth give me a lot of inspiration, so I re-implement the original code. If you want to learn about my work, please take a look at the VoxelBuilder and MusicEditor at https://box3.codemao.cn/ 
+I am currently developing a music composing software that runs on the browser, and found that the g200kg's tinysynth give me a lot of inspiration, so I re-implement the original code. If you want to learn about my work, please take a look at the VoxelBuilder and MusicEditor at https://box3.codemao.cn/ 
 
 ![react-tinysynth](./public/demo.png)
 
